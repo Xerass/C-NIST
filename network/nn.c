@@ -3,6 +3,59 @@
 #include "matrix.h"
 #include "nn.h" 
 #include "activations.h"
+#include "optimizers.h"
+
+// ========================
+// Network & Layer Creation
+// ========================
+
+Layer* create_layer(int in_features, int out_features, Activation activation) {
+    Layer* l = (Layer*)malloc(sizeof(Layer));
+
+    //init feats
+    l->in_features = in_features;
+    l->out_features = out_features;
+    l->act_type = activation;
+    
+    //init weights and biases
+    l->W = mat_create(out_features, in_features);
+    l->b = mat_create(out_features, 1);
+
+    //init caches to null for now they will be populated
+    l->A_prev = NULL;
+    l->Z = NULL;
+    l->A = NULL;
+    l->dW = NULL;
+    l->db = NULL;
+
+    //caches for momentum per layer
+    l->m_W = NULL;
+    l->v_W = NULL;
+    l->m_b = NULL;
+    l->v_b = NULL;
+
+    return l;
+}
+
+Network* create_network(int capacity){
+    Network* net = (Network*)malloc(sizeof(Network));
+    net->capacity = capacity;
+    net->num_layers = 0;
+    net->layers = (Layer**)malloc(capacity * sizeof(Layer*));
+    return net;
+}
+
+void network_add_layer(Network* net, Layer* l){
+    if (net->num_layers < net->capacity){
+        net->layers[net->num_layers++] = l;
+    } else {
+        printf("Error! Layer exceeded capacity\n");
+    }
+}
+
+// ========================
+// Forward & Backward Passes
+// ========================
 
 //we'd like to seprate the work if possible to isolate issues
 //so we'll create a per layer basis pass and a full network pass
@@ -94,4 +147,70 @@ void network_backward(Network* net, Matrix* loss_gradient) {
     }
     
     mat_free(current_dA); 
+}
+
+// optimization functions
+
+//uses SGD with momentum
+//given v = velocity , dW = weight gradient, lr = learning rate, m = momentum
+//the formuala operates as:
+//v = m * v + dW
+//W = w - lr * v
+//
+void layer_update_sgd(Layer* layer, float learning_rate, float momentum) {
+    //simple safety check, if no gradients, no updates
+    if (layer->dW == NULL || layer->db == NULL) return;
+    
+    //if momentum is above zero, we meed to create the velocity matrices (so we dont just alloc when momentum is not yet notable)
+    if (momentum > 0.0f) {
+        //also check if velocity caches do exist
+        if (layer->v_W == NULL) layer->v_W = mat_create(layer->W->rows, layer->W->cols);
+        if (layer->v_b == NULL) layer->v_b = mat_create(layer->b->rows, layer->b->cols);
+    }
+
+    //just calc total number of nodes to apply the update to
+    int size_W = layer->W->rows * layer->W->cols;
+    //pass this to the actual function
+    sgd_step(layer->W->nodes, layer->dW->nodes, momentum > 0.0f ? layer->v_W->nodes : NULL, size_W, learning_rate, momentum);
+
+    //same logic but for bias
+    int size_b = layer->b->rows * layer->b->cols;
+    sgd_step(layer->b->nodes, layer->db->nodes, momentum > 0.0f ? layer->v_b->nodes : NULL, size_b, learning_rate, momentum);
+}
+
+//simply call per layer the SGD optimizer
+void network_update_sgd(Network* net, float learning_rate, float momentum) {
+    for (int i = 0; i < net->num_layers; i++) {
+        layer_update_sgd(net->layers[i], learning_rate, momentum);
+    }
+}
+
+
+//adam optimizer
+void layer_update_adam(Layer* layer, int t, float learning_rate, float beta1, float beta2, float epsilon) {
+    //same guardrails
+    if (layer->dW == NULL || layer->db == NULL) return;
+
+    //adam requires per layer momentum / velocity (m)
+    //and it also needs RMSProp (v)
+    //so we check if they exist, if not we create them
+    if (layer->m_W == NULL) layer->m_W = mat_create(layer->W->rows, layer->W->cols);
+    if (layer->v_W == NULL) layer->v_W = mat_create(layer->W->rows, layer->W->cols);
+    if (layer->m_b == NULL) layer->m_b = mat_create(layer->b->rows, layer->b->cols);
+    if (layer->v_b == NULL) layer->v_b = mat_create(layer->b->rows, layer->b->cols);
+
+    //same logic as before, calc total nodes
+    int size_W = layer->W->rows * layer->W->cols;
+    //pass to the actual function
+    adam_step(layer->W->nodes, layer->dW->nodes, layer->m_W->nodes, layer->v_W->nodes, size_W, t, learning_rate, beta1, beta2, epsilon);
+
+    int size_b = layer->b->rows * layer->b->cols;
+    adam_step(layer->b->nodes, layer->db->nodes, layer->m_b->nodes, layer->v_b->nodes, size_b, t, learning_rate, beta1, beta2, epsilon);
+}
+
+//apply adam update to every layer
+void network_update_adam(Network* net, int t, float learning_rate, float beta1, float beta2, float epsilon) {
+    for (int i = 0; i < net->num_layers; i++) {
+        layer_update_adam(net->layers[i], t, learning_rate, beta1, beta2, epsilon);
+    }
 }

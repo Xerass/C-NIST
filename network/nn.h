@@ -23,6 +23,12 @@ typedef struct {
     Matrix* dW;
     Matrix* db;
     
+    // momentum / adam state caching
+    Matrix* m_W;
+    Matrix* v_W;
+    Matrix* m_b;
+    Matrix* v_b;
+    
     Activation act_type;
 } Layer;
 
@@ -32,3 +38,16 @@ typedef struct {
     int capacity;    // max layers allocated
 } Network;
 
+// ========================
+// Network & Layer Creation
+// ========================
+Layer* create_layer(int in_features, int out_features, Activation activation);
+Network* create_network(int capacity);
+void network_add_layer(Network* net, Layer* l);
+
+// Optimizers Wrapper Functions
+void layer_update_sgd(Layer* layer, float learning_rate, float momentum);
+void network_update_sgd(Network* net, float learning_rate, float momentum);
+
+void layer_update_adam(Layer* layer, int t, float learning_rate, float beta1, float beta2, float epsilon);
+void network_update_adam(Network* net, int t, float learning_rate, float beta1, float beta2, float epsilon);
