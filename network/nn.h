@@ -1,3 +1,8 @@
+#ifndef NN_H
+#define NN_H
+
+#include "matrix.h"
+
 //enums to easily reference our activvation functions
 typedef enum {
     ACT_SIGMOID,
@@ -51,3 +56,11 @@ void network_update_sgd(Network* net, float learning_rate, float momentum);
 
 void layer_update_adam(Layer* layer, int t, float learning_rate, float beta1, float beta2, float epsilon);
 void network_update_adam(Network* net, int t, float learning_rate, float beta1, float beta2, float epsilon);
+
+// Forward & Backward Passes
+Matrix* layer_forward(Layer* layer, Matrix* input);
+Matrix* network_forward(Network* net, Matrix* input);
+Matrix* layer_backward(Layer* layer, Matrix* dA);
+void    network_backward(Network* net, Matrix* loss_gradient);
+
+#endif // NN_H
