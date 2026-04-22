@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "matrix.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,12 +54,7 @@
     func sig: Matrix* mat_scalar_mult(Matrix* a, float scalar)
 */
 
-//core Struct
-typedef struct{
-    int rows;
-    int cols;
-    float *nodes; //1D array for contiguous memory efficiency
-} Matrix;
+// Matrix struct is defined in matrix.h
 
 //=================Memory stuff============
 //create mat
@@ -97,6 +93,34 @@ void mat_randomize(Matrix* m, float min, float max){
         m->nodes[i] = min + r * (max - min);
     }
 }
+
+void mat_dropout(Matrix* m, Matrix* mask, float p) {
+    if (p <= 0.0f) {
+        for (int i = 0; i < mask->rows * mask->cols; i++) mask->nodes[i] = 1.0f;
+        return;
+    }
+    if (p >= 1.0f) {
+        for (int i = 0; i < m->rows * m->cols; i++) {
+            m->nodes[i] = 0.0f;
+            mask->nodes[i] = 0.0f;
+        }
+        return;
+    }
+
+    float scale = 1.0f / (1.0f - p);
+    int total = m->rows * m->cols;
+    for (int i = 0; i < total; i++) {
+        float r = (float)rand() / (float)RAND_MAX;
+        if (r < p) {
+            m->nodes[i] = 0.0f;
+            mask->nodes[i] = 0.0f;
+        } else {
+            m->nodes[i] *= scale;
+            mask->nodes[i] = 1.0f;
+        }
+    }
+}
+
 
 //================Operations==================
 
@@ -230,6 +254,18 @@ Matrix* mat_map(Matrix* m, float (*func)(float)) {
     int total_nodes = m->rows * m->cols;
     for (int i = 0; i < total_nodes; i++) {
         out->nodes[i] = func(m->nodes[i]);
+    }
+    return out;
+}
+
+Matrix* mat_sum_rows(Matrix* m) {
+    Matrix* out = mat_create(m->rows, 1);
+    for (int i = 0; i < m->rows; i++) {
+        float sum = 0.0f;
+        for (int j = 0; j < m->cols; j++) {
+            sum += MAT_AT(m, i, j);
+        }
+        MAT_AT(out, i, 0) = sum;
     }
     return out;
 }

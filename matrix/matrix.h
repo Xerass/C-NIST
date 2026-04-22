@@ -23,6 +23,7 @@ Matrix* mat_copy(Matrix* m);
 
 // --- Initialization ---
 void    mat_randomize(Matrix* m, float min, float max);
+void    mat_dropout(Matrix* m, Matrix* mask, float p);
 
 // --- Basic Arithmetic ---
 Matrix* mat_add(Matrix* a, Matrix* b);
@@ -45,5 +46,8 @@ Matrix* mat_dot_transposeB(Matrix* a, Matrix* b);
 
 // Apply activation functions or their derivatives
 Matrix* mat_map(Matrix* m, float (*func)(float));
+
+// Sum along rows (axis 1) resulting in a column vector: (rows, 1)
+Matrix* mat_sum_rows(Matrix* m);
 
 #endif // MATRIX_H
