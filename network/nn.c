@@ -34,6 +34,9 @@ Layer* create_layer(int in_features, int out_features, Activation activation) {
     l->m_b = NULL;
     l->v_b = NULL;
 
+    l->dropout_rate = 0.0f;
+    l->dropout_mask = NULL;
+
     return l;
 }
 
@@ -62,7 +65,7 @@ void network_add_layer(Network* net, Layer* l){
 
 
 //outputs the post-activation matrix
-Matrix* layer_forward(Layer* layer, Matrix* input){
+Matrix* layer_forward(Layer* layer, Matrix* input, int is_training){
     //cache the input and remove prev caches (i love saving memory)
     //checks if prev layer exists, free's that prev and copies the new input
     if (layer->A_prev) mat_free(layer->A_prev);
@@ -82,16 +85,28 @@ Matrix* layer_forward(Layer* layer, Matrix* input){
         case ACT_RELU:    layer->A = mat_map(layer->Z, relu); break;
         default:          layer->A = mat_copy(layer->Z); break; // ACT_LINEAR
     }
+
+    // Apply dropout if rate > 0 and in training mode
+    if (is_training && layer->dropout_rate > 0.0f) {
+        if (layer->dropout_mask) mat_free(layer->dropout_mask);
+        layer->dropout_mask = mat_create(layer->A->rows, layer->A->cols);
+        mat_dropout(layer->A, layer->dropout_mask, layer->dropout_rate);
+    } else if (layer->dropout_mask) {
+        // Clear mask if not training or dropout not active
+        mat_free(layer->dropout_mask);
+        layer->dropout_mask = NULL;
+    }
+
     return layer->A;
 }
 
 
 //for network forward, we simply call forward sequentially from first to last
-Matrix* network_forward(Network* net, Matrix* input) {
+Matrix* network_forward(Network* net, Matrix* input, int is_training) {
     Matrix* current_activation = input;
     
     for (int i = 0; i < net->num_layers; i++) {
-        current_activation = layer_forward(net->layers[i], current_activation);
+        current_activation = layer_forward(net->layers[i], current_activation, is_training);
     }
     
     return current_activation; 
@@ -99,26 +114,32 @@ Matrix* network_forward(Network* net, Matrix* input) {
 
 //layer level backward pass
 Matrix* layer_backward(Layer* layer, Matrix* dA){
-    //input from previous activation derivative
+    // Apply dropout mask if it exists
+    Matrix* dA_scaled = dA;
+    if (layer->dropout_mask) {
+        dA_scaled = mat_hadamard(dA, layer->dropout_mask);
+        float scale = 1.0f / (1.0f - layer->dropout_rate);
+        Matrix* temp = mat_scalar_mult(dA_scaled, scale);
+        mat_free(dA_scaled);
+        dA_scaled = temp;
+    }
 
     //Calculate derivative of the activation function: g'(Z)
-    //this matrix is the dl/dA
     Matrix* dZ_activation = NULL;
         switch (layer->act_type) {
         case ACT_SIGMOID: dZ_activation = mat_map(layer->Z, sigmoid_prime); break;
         case ACT_RELU:    dZ_activation = mat_map(layer->Z, relu_prime); break;
         default:
-            //linear derivative is just 1          
             dZ_activation = mat_create(layer->Z->rows, layer->Z->cols);
             for(int i = 0; i < dZ_activation->rows * dZ_activation->cols; i++) 
                 dZ_activation->nodes[i] = 1.0f;
             break;
     }
 
-    //dZ = dA * g'(Z) this is the local error (change of Z with repect to activaion and its current activation)
-    //technically a dot product but simplifies to hadamard since our matrices are the same size and external activations do not affect our Z (so diagonal of jacobian are the only non 0)
-    Matrix* dZ = mat_hadamard(dA, dZ_activation);
+    //dZ = dA_scaled * g'(Z)
+    Matrix* dZ = mat_hadamard(dA_scaled, dZ_activation);
     mat_free(dZ_activation);
+    if (layer->dropout_mask) mat_free(dA_scaled);
 
     //compute weight gradients dW = dZ * A_prev^T (transposition to make dot work)
     if (layer->dW) mat_free(layer->dW);

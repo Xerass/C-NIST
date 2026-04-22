@@ -34,6 +34,9 @@ typedef struct {
     Matrix* m_b;
     Matrix* v_b;
     
+    float dropout_rate;
+    Matrix* dropout_mask;
+
     Activation act_type;
 } Layer;
 
@@ -58,8 +61,8 @@ void layer_update_adam(Layer* layer, int t, float learning_rate, float beta1, fl
 void network_update_adam(Network* net, int t, float learning_rate, float beta1, float beta2, float epsilon);
 
 // Forward & Backward Passes
-Matrix* layer_forward(Layer* layer, Matrix* input);
-Matrix* network_forward(Network* net, Matrix* input);
+Matrix* layer_forward(Layer* layer, Matrix* input, int is_training);
+Matrix* network_forward(Network* net, Matrix* input, int is_training);
 Matrix* layer_backward(Layer* layer, Matrix* dA);
 void    network_backward(Network* net, Matrix* loss_gradient);
 
