@@ -3,66 +3,19 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-//solely here for testing
 #include <assert.h>
 
-//MACRO for ease of writing later down the line
-//purpose is to access 1D array as a 2D matrix safely and cleanly
+// MACRO for ease of writing later down the line
+// purpose is to access 1D array as a 2D matrix safely and cleanly
 #define MAT_AT(m, r, c) (m)->nodes[(r) * (m)->cols + (c)]
 
-// what we need:
-// we need a matrix struct to streamline all operations
-
-/*
-    As for the Neural Network itself, we would need a couple of operations
-    
-    Z = output
-    w = weight
-    a = activation
-    b = bias
-    A = error
-
-    Forward Pass would require matrix mult
-    :: based on the formula Z = w * a + b 
-
-    func sig: Matrix* matmul(Matrix* a, Matrix*b)
-    
-    ::Bias addition would require an add
-    func sig: Matrix* mataddbias(Matrix* a, Matrix *bias)
-
-    ::activation func is simply applying a function to each element, effectively a map
-    ::we can make this function agnostic
-    func sig: void matrix_activation(Matrix* a, double (*func)(double))
-
-    Backward pass will require us to use jacobians to compute the gradients
-
-    ::matsub used for error calc, specifically for direction, actual loss is calculated separately
-    ::interestingly some functions fully canel out, meaning the derivateive ends up just being A - Y or a mat_sub
-    ::we can take advantage of this!
-
-    ::Hadamard product as a proxy for shorter dot product jacobians
-    ::This will handle the chain rule and transpositions for us
-
-    #skip transposition, 1D arrays can easily be handled
-    func sig: Matrix* mat_dot_transposeB(Matrix* a, Matrix* b)
-    -> represents: dW = dZ * Aprev^T (weight gradient)
-
-    func sig: Matrix* mat_dot_transposedA(Matrix* a, Matrix* b)
-    -> represents: dAprev = W^T * dZ (error gradient), literal punishment on nodes based on activation value change
-
-    ::Scalar multipy to handle learning rate
-    func sig: Matrix* mat_scalar_mult(Matrix* a, float scalar)
-*/
-
-// Matrix struct is defined in matrix.h
-
-//=================Memory stuff============
-//create mat
+// =================Memory stuff============
+// create mat
 Matrix* mat_create(int rows, int cols){
     Matrix* mat = (Matrix*)malloc(sizeof(Matrix));
     mat->rows = rows;
     mat->cols = cols;
-    //calloc for safe 0 defaults
+    // calloc for safe 0 defaults
     mat->nodes = (float*)calloc(rows * cols, sizeof(float));
     return mat;
 }
@@ -76,17 +29,15 @@ void mat_free(Matrix *mat){
     }
 }
 
-//we will need this to save the activation states for backprop
+// we will need this to save the activation states for backprop
 Matrix* mat_copy(Matrix* m) {
     Matrix* out = mat_create(m->rows, m->cols);
-    // memcpy for literal memeory chunk copy
     memcpy(out->nodes, m->nodes, m->rows * m->cols * sizeof(float));
     return out;
 }
 
-//=========initializations===================
+// =========initializations===================
 void mat_randomize(Matrix* m, float min, float max){
-    //randomizes initial weights
     int total_nodes = m->rows * m->cols;
     for (int i = 0; i < total_nodes; i++) {
         float r = (float)rand() / (float)RAND_MAX;
@@ -121,12 +72,10 @@ void mat_dropout(Matrix* m, Matrix* mask, float p) {
     }
 }
 
+// ================Operations==================
 
-//================Operations==================
-
-//Matrix Addition (usually for bias)
+// Matrix Addition (usually for bias when shapes match exactly)
 Matrix* mat_add(Matrix* a, Matrix* b){
-    //future uses of assert is for safety
     assert(a->rows == b->rows && a->cols == b->cols);
 
     Matrix* out = mat_create(a->rows, a->cols);
@@ -142,9 +91,9 @@ Matrix* mat_add(Matrix* a, Matrix* b){
 // sometimes for error / Gradient Subtraction
 Matrix* mat_sub(Matrix* a, Matrix* b) {
     assert(a->rows == b->rows && a->cols == b->cols);
-    
+
     Matrix* out = mat_create(a->rows, a->cols);
-    
+
     int total_nodes = a->rows * a->cols;
     for (int i = 0; i < total_nodes; i++) {
         out->nodes[i] = a->nodes[i] - b->nodes[i];
@@ -155,9 +104,9 @@ Matrix* mat_sub(Matrix* a, Matrix* b) {
 // used for local Gradients / activation derivatives
 Matrix* mat_hadamard(Matrix* a, Matrix* b) {
     assert(a->rows == b->rows && a->cols == b->cols);
-    
+
     Matrix* out = mat_create(a->rows, a->cols);
-    
+
     int total_nodes = a->rows * a->cols;
     for (int i = 0; i < total_nodes; i++) {
         out->nodes[i] = a->nodes[i] * b->nodes[i];
@@ -165,7 +114,7 @@ Matrix* mat_hadamard(Matrix* a, Matrix* b) {
     return out;
 }
 
-//used for scaling with learning rate
+// used for scaling with learning rate
 Matrix* mat_scalar_mult(Matrix* m, float scalar){
     Matrix* out = mat_create(m->rows, m->cols);
     int total_nodes = m->rows * m->cols;
@@ -175,17 +124,63 @@ Matrix* mat_scalar_mult(Matrix* m, float scalar){
     return out;
 }
 
+// adds a (rows, 1) bias to every column of a (rows, cols) matrix.
+// this is the broadcasted version of mat_add specifically for biases:
+// with batching, Z = W*A + b needs b broadcasted across the batch.
+Matrix* mat_add_bias(Matrix* m, Matrix* bias) {
+    assert(bias->rows == m->rows && bias->cols == 1);
 
-//==========cool stuff================
+    Matrix* out = mat_create(m->rows, m->cols);
+    for (int i = 0; i < m->rows; i++) {
+        float bi = MAT_AT(bias, i, 0);
+        for (int j = 0; j < m->cols; j++) {
+            MAT_AT(out, i, j) = MAT_AT(m, i, j) + bi;
+        }
+    }
+    return out;
+}
 
-//dot product for forward pass / linear transform
+// numerically stable column-wise softmax.
+// each column is one sample, softmax each column independently.
+// trick: subtract the column max before exp() to avoid overflow,
+// since softmax(x) == softmax(x - c) for any constant c.
+Matrix* mat_softmax_cols(Matrix* m) {
+    Matrix* out = mat_create(m->rows, m->cols);
+
+    for (int j = 0; j < m->cols; j++) {
+        // find max of this column for numerical stability
+        float max_val = MAT_AT(m, 0, j);
+        for (int i = 1; i < m->rows; i++) {
+            float v = MAT_AT(m, i, j);
+            if (v > max_val) max_val = v;
+        }
+
+        // exp(x - max) and accumulate sum
+        float sum = 0.0f;
+        for (int i = 0; i < m->rows; i++) {
+            float e = expf(MAT_AT(m, i, j) - max_val);
+            MAT_AT(out, i, j) = e;
+            sum += e;
+        }
+
+        // normalize, with a guard against pathological sum=0
+        if (sum <= 0.0f) sum = 1e-12f;
+        float inv = 1.0f / sum;
+        for (int i = 0; i < m->rows; i++) {
+            MAT_AT(out, i, j) *= inv;
+        }
+    }
+    return out;
+}
+
+// ==========cool stuff================
+
+// dot product for forward pass / linear transform
 Matrix* mat_dot(Matrix* a, Matrix* b) {
-    //the fundamental rule of matrix multiplication
-    assert(a->cols == b->rows); 
-    
-    //output matrix shape is (Rows of A) x (Cols of B)
+    assert(a->cols == b->rows);
+
     Matrix* out = mat_create(a->rows, b->cols);
-    
+
     for (int i = 0; i < a->rows; i++) {
         for (int j = 0; j < b->cols; j++) {
             float sum = 0.0f;
@@ -198,32 +193,16 @@ Matrix* mat_dot(Matrix* a, Matrix* b) {
     return out;
 }
 
-//we now have some useful gradients at hand (the final matrices)
-
-/*
-    To define: do note since we do not have the nabla symbol we need to use d to denote gradient 
-    though they are completely differnt things (gradients being vectors of partial derivatives of a scalar value function (the final loss (an altitude within the gradient) is the scalar value))
-    -The full formula looks like this Loss = 
-    dA is final activation gradient
-    dZ is the per layer node gradient
-    -these two are simply here to make the math work out
-    -these are transient errors that get passed but wont result in the final output
-    dW is the weight gradient from the weight layers
-    db is the bias gradient from the bias layers
-    -these two are the ones that actually get used to update the weights and biases
-*/
-
-
-//backprop with activation (error gradient) dAprev = W^T * dZ
+// backprop with activation (error gradient) dAprev = W^T * dZ
 Matrix* mat_dot_transposeA(Matrix* a, Matrix* b) {
-    assert(a->rows == b->rows); 
+    assert(a->rows == b->rows);
     Matrix* out = mat_create(a->cols, b->cols);
-    
+
     for (int i = 0; i < a->cols; i++) {
         for (int j = 0; j < b->cols; j++) {
             float sum = 0.0f;
             for (int k = 0; k < a->rows; k++) {
-                sum += MAT_AT(a, k, i) * MAT_AT(b, k, j); // Note the inverted k, i
+                sum += MAT_AT(a, k, i) * MAT_AT(b, k, j);
             }
             MAT_AT(out, i, j) = sum;
         }
@@ -231,16 +210,16 @@ Matrix* mat_dot_transposeA(Matrix* a, Matrix* b) {
     return out;
 }
 
-//backprop with weights (weight gradient) dW = dZ * Aprev^T
+// backprop with weights (weight gradient) dW = dZ * Aprev^T
 Matrix* mat_dot_transposeB(Matrix* a, Matrix* b) {
-    assert(a->cols == b->cols); 
+    assert(a->cols == b->cols);
     Matrix* out = mat_create(a->rows, b->rows);
-    
+
     for (int i = 0; i < a->rows; i++) {
         for (int j = 0; j < b->rows; j++) {
             float sum = 0.0f;
             for (int k = 0; k < a->cols; k++) {
-                sum += MAT_AT(a, i, k) * MAT_AT(b, j, k); // Note the inverted j, k
+                sum += MAT_AT(a, i, k) * MAT_AT(b, j, k);
             }
             MAT_AT(out, i, j) = sum;
         }
@@ -270,3 +249,136 @@ Matrix* mat_sum_rows(Matrix* m) {
     return out;
 }
 
+
+// =============================================================
+// Lazy-resize utility for layer caches
+// =============================================================
+
+void mat_ensure_shape(Matrix** m, int rows, int cols) {
+    if (*m != NULL && (*m)->rows == rows && (*m)->cols == cols) return;
+    if (*m != NULL) mat_free(*m);
+    *m = mat_create(rows, cols);
+}
+
+void mat_fill(Matrix* m, float val) {
+    int n = m->rows * m->cols;
+    for (int i = 0; i < n; i++) m->nodes[i] = val;
+}
+
+// =============================================================
+// In-place / _into variants
+// =============================================================
+
+void mat_copy_into(Matrix* out, Matrix* m) {
+    assert(out->rows == m->rows && out->cols == m->cols);
+    memcpy(out->nodes, m->nodes, (size_t)out->rows * (size_t)out->cols * sizeof(float));
+}
+
+void mat_dot_into(Matrix* out, Matrix* a, Matrix* b) {
+    assert(a->cols == b->rows);
+    assert(out->rows == a->rows && out->cols == b->cols);
+
+    for (int i = 0; i < a->rows; i++) {
+        for (int j = 0; j < b->cols; j++) {
+            float sum = 0.0f;
+            for (int k = 0; k < a->cols; k++) {
+                sum += MAT_AT(a, i, k) * MAT_AT(b, k, j);
+            }
+            MAT_AT(out, i, j) = sum;
+        }
+    }
+}
+
+void mat_dot_transposeA_into(Matrix* out, Matrix* a, Matrix* b) {
+    assert(a->rows == b->rows);
+    assert(out->rows == a->cols && out->cols == b->cols);
+
+    for (int i = 0; i < a->cols; i++) {
+        for (int j = 0; j < b->cols; j++) {
+            float sum = 0.0f;
+            for (int k = 0; k < a->rows; k++) {
+                sum += MAT_AT(a, k, i) * MAT_AT(b, k, j);
+            }
+            MAT_AT(out, i, j) = sum;
+        }
+    }
+}
+
+void mat_dot_transposeB_into(Matrix* out, Matrix* a, Matrix* b) {
+    assert(a->cols == b->cols);
+    assert(out->rows == a->rows && out->cols == b->rows);
+
+    for (int i = 0; i < a->rows; i++) {
+        for (int j = 0; j < b->rows; j++) {
+            float sum = 0.0f;
+            for (int k = 0; k < a->cols; k++) {
+                sum += MAT_AT(a, i, k) * MAT_AT(b, j, k);
+            }
+            MAT_AT(out, i, j) = sum;
+        }
+    }
+}
+
+void mat_hadamard_inplace(Matrix* a, Matrix* b) {
+    assert(a->rows == b->rows && a->cols == b->cols);
+    int n = a->rows * a->cols;
+    for (int i = 0; i < n; i++) a->nodes[i] *= b->nodes[i];
+}
+
+void mat_scalar_mult_inplace(Matrix* m, float scalar) {
+    int n = m->rows * m->cols;
+    for (int i = 0; i < n; i++) m->nodes[i] *= scalar;
+}
+
+void mat_add_bias_inplace(Matrix* m, Matrix* bias) {
+    assert(bias->rows == m->rows && bias->cols == 1);
+    for (int i = 0; i < m->rows; i++) {
+        float bi = MAT_AT(bias, i, 0);
+        for (int j = 0; j < m->cols; j++) {
+            MAT_AT(m, i, j) += bi;
+        }
+    }
+}
+
+void mat_sum_rows_into(Matrix* out, Matrix* m) {
+    assert(out->rows == m->rows && out->cols == 1);
+    for (int i = 0; i < m->rows; i++) {
+        float sum = 0.0f;
+        for (int j = 0; j < m->cols; j++) {
+            sum += MAT_AT(m, i, j);
+        }
+        MAT_AT(out, i, 0) = sum;
+    }
+}
+
+void mat_map_into(Matrix* out, Matrix* m, float (*func)(float)) {
+    assert(out->rows == m->rows && out->cols == m->cols);
+    int n = m->rows * m->cols;
+    for (int i = 0; i < n; i++) out->nodes[i] = func(m->nodes[i]);
+}
+
+void mat_softmax_cols_into(Matrix* out, Matrix* m) {
+    assert(out->rows == m->rows && out->cols == m->cols);
+
+    for (int j = 0; j < m->cols; j++) {
+        // per-column max for numerical stability
+        float max_val = MAT_AT(m, 0, j);
+        for (int i = 1; i < m->rows; i++) {
+            float v = MAT_AT(m, i, j);
+            if (v > max_val) max_val = v;
+        }
+
+        float sum = 0.0f;
+        for (int i = 0; i < m->rows; i++) {
+            float e = expf(MAT_AT(m, i, j) - max_val);
+            MAT_AT(out, i, j) = e;
+            sum += e;
+        }
+
+        if (sum <= 0.0f) sum = 1e-12f;
+        float inv = 1.0f / sum;
+        for (int i = 0; i < m->rows; i++) {
+            MAT_AT(out, i, j) *= inv;
+        }
+    }
+}
